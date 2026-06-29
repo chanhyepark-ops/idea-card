@@ -95,6 +95,16 @@
   font-size: 13px;
 }
 
+.status-message {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.status-message.error {
+  color: var(--danger-500);
+}
+
 .primary-button,
 .secondary-button,
 .danger-button {
@@ -108,6 +118,14 @@
     transform 160ms ease,
     box-shadow 160ms ease,
     opacity 160ms ease;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled,
+.danger-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
 }
 
 .primary-button {

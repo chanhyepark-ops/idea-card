@@ -1,5 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import './App.css'
+import { supabase } from './lib/supabase'
+
+type IdeaRow = {
+  id: string
+  content: string
+  created_at: string
+}
 
 type Idea = {
   id: string
@@ -11,24 +18,67 @@ type Idea = {
 function App() {
   const [draft, setDraft] = useState('')
   const [ideas, setIdeas] = useState<Idea[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [errorMessage, setErrorMessage] = useState('')
 
-  const addIdea = () => {
-    const content = draft.trim()
+  useEffect(() => {
+    void fetchIdeas()
+  }, [])
 
-    if (!content) {
+  const toIdeaCard = (idea: IdeaRow): Idea => ({
+    id: idea.id,
+    content: idea.content,
+    draft: idea.content,
+    isEditing: false,
+  })
+
+  const fetchIdeas = async () => {
+    setIsLoading(true)
+    setErrorMessage('')
+
+    const { data, error } = await supabase
+      .from('ideas')
+      .select('id, content, created_at')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      setErrorMessage(
+        '아이디어를 불러오지 못했습니다. Supabase에 `ideas` 테이블과 정책이 있는지 확인해 주세요.',
+      )
+      setIsLoading(false)
       return
     }
 
-    setIdeas((current) => [
-      {
-        id: crypto.randomUUID(),
-        content,
-        isEditing: false,
-        draft: content,
-      },
-      ...current,
-    ])
+    setIdeas((data ?? []).map(toIdeaCard))
+    setIsLoading(false)
+  }
+
+  const addIdea = async () => {
+    const content = draft.trim()
+
+    if (!content || isSubmitting) {
+      return
+    }
+
+    setIsSubmitting(true)
+    setErrorMessage('')
+
+    const { data, error } = await supabase
+      .from('ideas')
+      .insert({ content })
+      .select('id, content, created_at')
+      .single()
+
+    if (error) {
+      setErrorMessage('아이디어를 저장하지 못했습니다. 다시 시도해 주세요.')
+      setIsSubmitting(false)
+      return
+    }
+
+    setIdeas((current) => [toIdeaCard(data), ...current])
     setDraft('')
+    setIsSubmitting(false)
   }
 
   const startEdit = (id: string) => {
@@ -47,23 +97,47 @@ function App() {
     )
   }
 
-  const saveIdea = (id: string) => {
+  const saveIdea = async (id: string) => {
+    const targetIdea = ideas.find((idea) => idea.id === id)
+
+    if (!targetIdea || isSubmitting) {
+      return
+    }
+
+    const nextContent = targetIdea.draft.trim()
+
+    if (!nextContent) {
+      setErrorMessage('빈 내용으로는 저장할 수 없습니다.')
+      return
+    }
+
+    setIsSubmitting(true)
+    setErrorMessage('')
+
+    const { error } = await supabase
+      .from('ideas')
+      .update({ content: nextContent })
+      .eq('id', id)
+
+    if (error) {
+      setErrorMessage('아이디어를 수정하지 못했습니다. 다시 시도해 주세요.')
+      setIsSubmitting(false)
+      return
+    }
+
     setIdeas((current) =>
-      current.map((idea) => {
-        if (idea.id !== id) {
-          return idea
-        }
-
-        const nextContent = idea.draft.trim()
-
-        return {
-          ...idea,
-          content: nextContent || idea.content,
-          draft: nextContent || idea.content,
-          isEditing: false,
-        }
-      }),
+      current.map((idea) =>
+        idea.id === id
+          ? {
+              ...idea,
+              content: nextContent,
+              draft: nextContent,
+              isEditing: false,
+            }
+          : idea,
+      ),
     )
+    setIsSubmitting(false)
   }
 
   const cancelEdit = (id: string) => {
@@ -76,8 +150,24 @@ function App() {
     )
   }
 
-  const deleteIdea = (id: string) => {
+  const deleteIdea = async (id: string) => {
+    if (isSubmitting) {
+      return
+    }
+
+    setIsSubmitting(true)
+    setErrorMessage('')
+
+    const { error } = await supabase.from('ideas').delete().eq('id', id)
+
+    if (error) {
+      setErrorMessage('아이디어를 삭제하지 못했습니다. 다시 시도해 주세요.')
+      setIsSubmitting(false)
+      return
+    }
+
     setIdeas((current) => current.filter((idea) => idea.id !== id))
+    setIsSubmitting(false)
   }
 
   return (
@@ -104,12 +194,18 @@ function App() {
           />
           <div className="composer-actions">
             <span className="hint">
-              Enter로 저장은 하지 않고, 버튼으로만 추가합니다.
+              Supabase와 연결된 아이디어 보드입니다.
             </span>
-            <button type="button" className="primary-button" onClick={addIdea}>
-              저장
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => void addIdea()}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? '저장 중...' : '저장'}
             </button>
           </div>
+          {errorMessage ? <p className="status-message error">{errorMessage}</p> : null}
         </div>
       </section>
 
@@ -122,7 +218,9 @@ function App() {
           <div className="card-count">{ideas.length} cards</div>
         </div>
 
-        {ideas.length === 0 ? (
+        {isLoading ? (
+          <div className="empty-state">아이디어를 불러오는 중입니다...</div>
+        ) : ideas.length === 0 ? (
           <div className="empty-state">
             아직 카드가 없습니다. 왼쪽에 아이디어를 입력하고 저장해 보세요.
           </div>
@@ -145,15 +243,17 @@ function App() {
                         type="button"
                         className="secondary-button"
                         onClick={() => cancelEdit(idea.id)}
+                        disabled={isSubmitting}
                       >
                         취소
                       </button>
                       <button
                         type="button"
                         className="primary-button"
-                        onClick={() => saveIdea(idea.id)}
+                        onClick={() => void saveIdea(idea.id)}
+                        disabled={isSubmitting}
                       >
-                        저장
+                        {isSubmitting ? '저장 중...' : '저장'}
                       </button>
                     </div>
                   </>
@@ -165,15 +265,17 @@ function App() {
                         type="button"
                         className="secondary-button"
                         onClick={() => startEdit(idea.id)}
+                        disabled={isSubmitting}
                       >
                         수정
                       </button>
                       <button
                         type="button"
                         className="danger-button"
-                        onClick={() => deleteIdea(idea.id)}
+                        onClick={() => void deleteIdea(idea.id)}
+                        disabled={isSubmitting}
                       >
-                        삭제
+                        {isSubmitting ? '처리 중...' : '삭제'}
                       </button>
                     </div>
                   </>
